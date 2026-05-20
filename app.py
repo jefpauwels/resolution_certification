@@ -163,15 +163,28 @@ def observed_guess_map(
     return values
 
 
-def rows_to_frame(rows: list[R.CertificationRow]) -> pd.DataFrame:
+def effective_intensity_cap(mus: tuple[float, ...], case: R.CertificationConfig) -> float:
+    """Return the intensity cap used by Resolution.py for an intensity-bounded row."""
+
+    raw_cap = case.intensity_cap if case.intensity_cap is not None else max(mus[: case.num_inputs])
+    return min(float(raw_cap), case.max_photons + 1.0)
+
+
+def rows_to_frame(
+    rows: list[R.CertificationRow],
+    cases: tuple[R.CertificationConfig, ...],
+    mus: tuple[float, ...],
+) -> pd.DataFrame:
     records = []
-    for row in rows:
+    for row, case in zip(rows, cases):
         p_guess = row.experimental_guess
         records.append(
             {
                 "m": row.max_photons,
                 "N": row.num_inputs,
                 "R": row.resolution,
+                "input I": None if case.intensity_cap is None else float(case.intensity_cap),
+                "I used": effective_intensity_cap(mus, case),
                 "trusted bound [%]": 100.0 * row.trusted_bound,
                 "intensity-bound [%]": 100.0 * row.untrusted_bound,
                 "P_guess [%]": None if p_guess is None else 100.0 * p_guess,
@@ -217,6 +230,11 @@ def main() -> None:
     )
 
     st.subheader("Certification cases")
+    st.caption(
+        "Column I is the intensity bound for the untrusted/intensity-bounded witness. "
+        "Leave it blank to use the largest selected input intensity; Resolution.py then "
+        "uses min(I, m+1)."
+    )
     cases_upload = st.file_uploader("Upload cases CSV", type="csv", key="cases_csv")
     cases_frame = read_csv_upload(cases_upload, default_cases_frame())
     cases_frame = st.data_editor(
@@ -224,6 +242,12 @@ def main() -> None:
         num_rows="dynamic",
         use_container_width=True,
         key="cases_table",
+        column_config={
+            "I": st.column_config.NumberColumn(
+                "intensity bound I",
+                help="Optional cap for the intensity-bounded witness. Blank means max selected input intensity.",
+            ),
+        },
     )
 
     if st.button("Compute witnesses", type="primary"):
@@ -253,13 +277,15 @@ def main() -> None:
             st.error(f"Could not compute witnesses: {exc}")
             return
 
-        result = rows_to_frame(rows)
+        result = rows_to_frame(rows, cases, mus)
         st.subheader("Results")
         st.dataframe(
             result,
             use_container_width=True,
             hide_index=True,
             column_config={
+                "input I": st.column_config.NumberColumn(format="%.4f"),
+                "I used": st.column_config.NumberColumn(format="%.4f"),
                 "trusted bound [%]": st.column_config.NumberColumn(format="%.2f"),
                 "intensity-bound [%]": st.column_config.NumberColumn(format="%.2f"),
                 "P_guess [%]": st.column_config.NumberColumn(format="%.2f"),
