@@ -41,7 +41,7 @@ OBSERVED_GUESSING_PROBABILITIES = {
 
 # Certification rows as (num_inputs, max_photons, resolution, intensity_cap).
 # Use intensity_cap=None to take the largest intensity among the selected inputs,
-# clipped by the subspace condition I <= max_photons + 1 in Resolution.py.
+# which must satisfy the subspace-witness condition I <= max_photons + 1.
 CERTIFICATION_CASES = (
     (2, 1, 1, None),
     (3, 2, 2, None),

@@ -810,10 +810,16 @@ def build_certification_table(
             tail_mu=subset[-1],
             required_indices=required_indices,
         ).probability
-        cap = case.intensity_cap if case.intensity_cap is not None else max(subset)
-        cap = min(cap, case.max_photons + 1)
+        cap = float(case.intensity_cap if case.intensity_cap is not None else max(subset))
         if cap <= 0:
             raise ValueError("Intensity cap must be positive")
+        max_valid_cap = float(case.max_photons + 1)
+        if cap > max_valid_cap + 1e-12:
+            raise ValueError(
+                "The intensity-bounded subspace witness requires I <= m+1; "
+                f"got I={cap:g} for m={case.max_photons}."
+            )
+        cap = min(cap, max_valid_cap)
         full_table = untrusted_witness_table(
             num_states=case.num_inputs,
             intensity_cap=cap,

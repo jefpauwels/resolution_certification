@@ -59,10 +59,24 @@ def check_efficiency_limited_thresholds() -> None:
     assert_close("threshold [0..3], R=4", table[3][4], 81.1, 0.1)
 
 
+def check_invalid_intensity_cap_is_rejected() -> None:
+    try:
+        R.build_certification_table(
+            mus=(0.0, 1.0),
+            cases=(R.CertificationConfig(num_inputs=2, max_photons=1, resolution=1, intensity_cap=3.0),),
+        )
+    except ValueError as exc:
+        if "I <= m+1" not in str(exc):
+            raise AssertionError(f"Unexpected error for invalid intensity cap: {exc}") from exc
+    else:
+        raise AssertionError("Expected invalid intensity cap I > m+1 to be rejected")
+
+
 def main() -> None:
     check_certification_table()
     check_effective_efficiencies()
     check_efficiency_limited_thresholds()
+    check_invalid_intensity_cap_is_rejected()
     print("All smoke tests passed.")
 
 

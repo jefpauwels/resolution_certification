@@ -13,6 +13,7 @@ import experimental_data as D
 
 
 PROBABILITY_COLUMNS = [f"p({i})" for i in range(8)] + ["p(>=8)"]
+DEFAULT_PROBABILITY_COLUMN_COUNT = len(PROBABILITY_COLUMNS)
 CASE_COLUMNS = ["N", "m", "R", "I"]
 
 
@@ -20,8 +21,27 @@ def default_intensities_frame() -> pd.DataFrame:
     return pd.DataFrame({"mu": list(D.INTENSITIES)})
 
 
-def default_probabilities_frame() -> pd.DataFrame:
-    return pd.DataFrame(D.CLICK_PROBABILITIES, columns=PROBABILITY_COLUMNS)
+def default_probabilities_frame(num_columns: int = DEFAULT_PROBABILITY_COLUMN_COUNT) -> pd.DataFrame:
+    frame = pd.DataFrame(D.CLICK_PROBABILITIES, columns=PROBABILITY_COLUMNS)
+    return resize_probability_frame(frame, num_columns)
+
+
+def resize_probability_frame(frame: pd.DataFrame, num_columns: int) -> pd.DataFrame:
+    if num_columns < 1:
+        raise ValueError("At least one probability column is required.")
+    if num_columns == len(frame.columns):
+        return frame.copy()
+    if num_columns < len(frame.columns):
+        resized = frame.iloc[:, :num_columns].copy()
+        if num_columns < len(frame.columns):
+            resized.iloc[:, -1] = frame.iloc[:, num_columns - 1 :].sum(axis=1)
+        resized.columns = [f"p({i})" for i in range(num_columns - 1)] + [f"p(>={num_columns - 1})"]
+        return resized
+
+    resized = frame.copy()
+    for index in range(len(frame.columns), num_columns):
+        resized[f"p(extra {index - len(frame.columns) + 1})"] = 0.0
+    return resized
 
 
 def default_cases_frame() -> pd.DataFrame:
@@ -68,7 +88,14 @@ def parse_probabilities(frame: pd.DataFrame) -> tuple[tuple[float, ...], ...]:
     if "mu" in numeric.columns and len(numeric.columns) > 1:
         numeric = numeric.drop(columns=["mu"])
     numeric = numeric.dropna(how="all")
+    numeric = numeric.fillna(0.0)
     return tuple(tuple(float(value) for value in row) for row in numeric.to_numpy())
+
+
+def intensity_cap_for_case(mus: tuple[float, ...], case: R.CertificationConfig) -> float | None:
+    if case.num_inputs > len(mus):
+        return None
+    return float(case.intensity_cap if case.intensity_cap is not None else max(mus[: case.num_inputs]))
 
 
 def parse_cases(frame: pd.DataFrame) -> tuple[R.CertificationConfig, ...]:
@@ -141,11 +168,21 @@ def validate_inputs(
         if case.resolution > case.num_inputs:
             st.error(f"Case R={case.resolution}, N={case.num_inputs}: R cannot exceed N.")
             ok = False
-        if case.intensity_cap is not None and case.intensity_cap > case.max_photons + 1:
-            st.warning(
-                f"Case N={case.num_inputs}, m={case.max_photons}, R={case.resolution}: "
-                "I is larger than m+1 and will be clipped by Resolution.py."
-            )
+        cap = intensity_cap_for_case(mus, case)
+        if cap is not None:
+            if cap <= 0:
+                st.error(
+                    f"Case N={case.num_inputs}, m={case.max_photons}, R={case.resolution}: "
+                    "the intensity bound I must be positive."
+                )
+                ok = False
+            if cap > case.max_photons + 1 + 1e-12:
+                st.error(
+                    f"Case N={case.num_inputs}, m={case.max_photons}, R={case.resolution}: "
+                    f"the intensity-bounded witness requires I <= m+1 = {case.max_photons + 1}, "
+                    f"but I = {cap:g}. Increase m or enter a smaller certified intensity bound."
+                )
+                ok = False
     return ok
 
 
@@ -166,8 +203,10 @@ def observed_guess_map(
 def effective_intensity_cap(mus: tuple[float, ...], case: R.CertificationConfig) -> float:
     """Return the intensity cap used by Resolution.py for an intensity-bounded row."""
 
-    raw_cap = case.intensity_cap if case.intensity_cap is not None else max(mus[: case.num_inputs])
-    return min(float(raw_cap), case.max_photons + 1.0)
+    cap = intensity_cap_for_case(mus, case)
+    if cap is None:
+        raise ValueError("Case uses more intensities than provided.")
+    return cap
 
 
 def rows_to_frame(
@@ -207,7 +246,7 @@ def main() -> None:
             help="For the bundled example data this reproduces the manuscript table. "
             "Turn this off to compute P_guess directly from the probability table.",
         )
-        st.caption("The app calls Resolution.py without modifying the numerical routines.")
+        st.caption("Probability table columns are detector-output labels. Add rows below or set the column count.")
 
     st.subheader("Input intensities")
     intensity_upload = st.file_uploader("Upload intensity CSV", type="csv", key="intensity_csv")
@@ -221,7 +260,16 @@ def main() -> None:
 
     st.subheader("Click probabilities")
     probability_upload = st.file_uploader("Upload probability CSV", type="csv", key="probability_csv")
-    probabilities_frame = read_csv_upload(probability_upload, default_probabilities_frame())
+    probability_column_count = st.number_input(
+        "Number of probability columns",
+        min_value=1,
+        max_value=100,
+        value=DEFAULT_PROBABILITY_COLUMN_COUNT,
+        step=1,
+        help="Streamlit table editors add rows, not columns. Use this control for manual entry, or upload a CSV with any number of output columns.",
+        disabled=probability_upload is not None,
+    )
+    probabilities_frame = read_csv_upload(probability_upload, default_probabilities_frame(int(probability_column_count)))
     probabilities_frame = st.data_editor(
         probabilities_frame,
         num_rows="dynamic",
@@ -232,8 +280,8 @@ def main() -> None:
     st.subheader("Certification cases")
     st.caption(
         "Column I is the intensity bound for the untrusted/intensity-bounded witness. "
-        "Leave it blank to use the largest selected input intensity; Resolution.py then "
-        "uses min(I, m+1)."
+        "Leave it blank to use the largest selected input intensity. The current bound "
+        "is valid only when I <= m+1; cases outside that regime are rejected."
     )
     cases_upload = st.file_uploader("Upload cases CSV", type="csv", key="cases_csv")
     cases_frame = read_csv_upload(cases_upload, default_cases_frame())
