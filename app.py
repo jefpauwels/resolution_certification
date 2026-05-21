@@ -260,6 +260,14 @@ def result_column_config() -> dict[str, object]:
     }
 
 
+def certification_column_config() -> dict[str, object]:
+    return {
+        "trusted bound [%]": st.column_config.NumberColumn(format="%.2f"),
+        "intensity-bound [%]": st.column_config.NumberColumn(format="%.2f"),
+        "P_guess [%]": st.column_config.NumberColumn(format="%.2f"),
+    }
+
+
 def metric_value(value: object, suffix: str = "") -> str:
     if value is None or pd.isna(value):
         return "-"
@@ -316,18 +324,47 @@ def efficiency_chart_frame(frame: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def render_dashboard(frame: pd.DataFrame) -> None:
-    render_metric_row(frame)
+def certification_table_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    return frame[
+        [
+            "m",
+            "N",
+            "R",
+            "trusted bound [%]",
+            "intensity-bound [%]",
+            "P_guess [%]",
+            "trusted certified resolution",
+            "intensity certified resolution",
+            "trusted status",
+            "intensity status",
+        ]
+    ].copy()
 
+
+def render_bar_plots(frame: pd.DataFrame) -> None:
     left, right = st.columns(2)
     with left:
         st.subheader("Guessing probability")
-        st.line_chart(bounds_chart_frame(frame))
+        st.bar_chart(bounds_chart_frame(frame))
     with right:
         st.subheader("Certified efficiency")
-        st.line_chart(efficiency_chart_frame(frame))
+        st.bar_chart(efficiency_chart_frame(frame))
 
-    st.subheader("Certification table")
+
+def render_dashboard(frame: pd.DataFrame) -> None:
+    render_metric_row(frame)
+
+    render_bar_plots(frame)
+
+    st.subheader("Resolution certification")
+    st.dataframe(
+        certification_table_frame(frame),
+        use_container_width=True,
+        hide_index=True,
+        column_config=certification_column_config(),
+    )
+
+    st.subheader("Full numerical table")
     st.dataframe(
         frame,
         use_container_width=True,
