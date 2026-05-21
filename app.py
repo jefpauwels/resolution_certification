@@ -235,13 +235,187 @@ def rows_to_frame(
                 ),
                 "trusted certified resolution": row.certified_resolution_trusted(),
                 "intensity certified resolution": row.certified_resolution_intensity(),
+                "trusted status": certification_status(p_guess, row.trusted_bound),
+                "intensity status": certification_status(p_guess, row.untrusted_bound),
             }
         )
     return pd.DataFrame(records)
 
 
+def certification_status(observed: float | None, bound: float) -> str | None:
+    if observed is None:
+        return None
+    return "Certified" if observed > bound else "Not certified"
+
+
+def result_column_config() -> dict[str, object]:
+    return {
+        "input I": st.column_config.NumberColumn(format="%.4f"),
+        "I used": st.column_config.NumberColumn(format="%.4f"),
+        "trusted bound [%]": st.column_config.NumberColumn(format="%.2f"),
+        "intensity-bound [%]": st.column_config.NumberColumn(format="%.2f"),
+        "P_guess [%]": st.column_config.NumberColumn(format="%.2f"),
+        "trusted eta_* [%]": st.column_config.NumberColumn(format="%.2f"),
+        "intensity eta_* [%]": st.column_config.NumberColumn(format="%.2f"),
+    }
+
+
+def metric_value(value: object, suffix: str = "") -> str:
+    if value is None or pd.isna(value):
+        return "-"
+    if isinstance(value, float):
+        return f"{value:.2f}{suffix}"
+    return f"{value}{suffix}"
+
+
+def best_efficiency(frame: pd.DataFrame) -> float | None:
+    values = pd.concat(
+        [
+            frame["trusted eta_* [%]"],
+            frame["intensity eta_* [%]"],
+        ],
+        ignore_index=True,
+    ).dropna()
+    if values.empty:
+        return None
+    return float(values.max())
+
+
+def render_metric_row(frame: pd.DataFrame) -> None:
+    case_count, trusted_res, intensity_res, eta = st.columns(4)
+    case_count.metric("Cases", f"{len(frame)}")
+    trusted_res.metric("Max trusted resolution", metric_value(frame["trusted certified resolution"].max()))
+    intensity_res.metric("Max intensity resolution", metric_value(frame["intensity certified resolution"].max()))
+    eta.metric("Best eta_*", metric_value(best_efficiency(frame), "%"))
+
+
+def bounds_chart_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    return (
+        frame[["m", "P_guess [%]", "trusted bound [%]", "intensity-bound [%]"]]
+        .rename(
+            columns={
+                "P_guess [%]": "P_guess",
+                "trusted bound [%]": "trusted bound",
+                "intensity-bound [%]": "intensity bound",
+            }
+        )
+        .set_index("m")
+    )
+
+
+def efficiency_chart_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    return (
+        frame[["m", "trusted eta_* [%]", "intensity eta_* [%]"]]
+        .rename(
+            columns={
+                "trusted eta_* [%]": "trusted eta_*",
+                "intensity eta_* [%]": "intensity eta_*",
+            }
+        )
+        .set_index("m")
+    )
+
+
+def render_dashboard(frame: pd.DataFrame) -> None:
+    render_metric_row(frame)
+
+    left, right = st.columns(2)
+    with left:
+        st.subheader("Guessing probability")
+        st.line_chart(bounds_chart_frame(frame))
+    with right:
+        st.subheader("Certified efficiency")
+        st.line_chart(efficiency_chart_frame(frame))
+
+    st.subheader("Certification table")
+    st.dataframe(
+        frame,
+        use_container_width=True,
+        hide_index=True,
+        column_config=result_column_config(),
+    )
+
+
+def latex_results_table(frame: pd.DataFrame) -> str:
+    columns = [
+        ("m", "$m$", "{:d}"),
+        ("N", "$N$", "{:d}"),
+        ("R", "$R$", "{:d}"),
+        ("I used", "$I$", "{:.4f}"),
+        ("trusted bound [%]", "Trusted", "{:.2f}\\%"),
+        ("intensity-bound [%]", "Intensity", "{:.2f}\\%"),
+        ("P_guess [%]", "$P_{\\rm guess}$", "{:.2f}\\%"),
+        ("trusted eta_* [%]", "$\\eta_*^{\\rm tr}$", "{:.2f}\\%"),
+        ("intensity eta_* [%]", "$\\eta_*^{I}$", "{:.2f}\\%"),
+    ]
+    lines = [
+        "\\begin{tabular}{ccccccccc}",
+        "\\hline",
+        " & ".join(label for _, label, _ in columns) + " \\\\",
+        "\\hline",
+    ]
+    for _, row in frame.iterrows():
+        values = []
+        for column, _, template in columns:
+            value = row[column]
+            if pd.isna(value):
+                values.append("-")
+            elif template == "{:d}":
+                values.append(template.format(int(value)))
+            else:
+                values.append(template.format(float(value)))
+        lines.append(" & ".join(values) + " \\\\")
+    lines.extend(["\\hline", "\\end{tabular}"])
+    return "\n".join(lines)
+
+
+def initialize_session_state() -> None:
+    if "result_frame" not in st.session_state:
+        rows = R.build_manuscript_certification_table()
+        st.session_state["result_frame"] = rows_to_frame(
+            rows,
+            R.MANUSCRIPT_CERTIFICATION_CASES,
+            D.INTENSITIES,
+        )
+
+
+def compute_results(
+    intensities_frame: pd.DataFrame,
+    probabilities_frame: pd.DataFrame,
+    cases_frame: pd.DataFrame,
+    use_manuscript_values: bool,
+) -> pd.DataFrame | None:
+    try:
+        mus = parse_intensities(intensities_frame)
+        probabilities = parse_probabilities(probabilities_frame)
+        cases = parse_cases(cases_frame)
+    except Exception as exc:
+        st.error(f"Could not parse inputs: {exc}")
+        return None
+
+    if not cases:
+        st.error("At least one certification case is required.")
+        return None
+    if not validate_inputs(mus, probabilities, cases):
+        return None
+
+    guesses = observed_guess_map(probabilities, cases, use_manuscript_values)
+    try:
+        rows = R.build_certification_table(
+            mus=mus,
+            cases=cases,
+            measurement_probabilities=probabilities,
+            observed_guesses=guesses,
+        )
+    except Exception as exc:
+        st.error(f"Could not compute witnesses: {exc}")
+        return None
+    return rows_to_frame(rows, cases, mus)
+
+
 def main() -> None:
     st.set_page_config(page_title="PNR Resolution Certification", layout="wide")
+    initialize_session_state()
     st.title("PNR Resolution Certification")
 
     with st.sidebar:
@@ -252,101 +426,107 @@ def main() -> None:
             help="For the bundled example data this reproduces the manuscript table. "
             "Turn this off to compute P_guess directly from the probability table.",
         )
-        st.caption("Probability table columns are detector-output labels. Add rows below or set the column count.")
 
-    st.subheader("Input intensities")
-    intensity_upload = st.file_uploader("Upload intensity CSV", type="csv", key="intensity_csv")
-    intensities_frame = read_csv_upload(intensity_upload, default_intensities_frame())
-    intensities_frame = st.data_editor(
-        intensities_frame,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="intensities_table",
-    )
+    results_tab, data_tab, cases_tab, export_tab = st.tabs(["Results", "Data", "Cases", "Export"])
 
-    st.subheader("Click probabilities")
-    probability_upload = st.file_uploader("Upload probability CSV", type="csv", key="probability_csv")
-    probability_column_count = st.number_input(
-        "Number of probability columns",
-        min_value=1,
-        max_value=100,
-        value=DEFAULT_PROBABILITY_COLUMN_COUNT,
-        step=1,
-        help="Streamlit table editors add rows, not columns. Use this control for manual entry, or upload a CSV with any number of output columns.",
-        disabled=probability_upload is not None,
-    )
-    probabilities_frame = read_csv_upload(probability_upload, default_probabilities_frame(int(probability_column_count)))
-    probabilities_frame = st.data_editor(
-        probabilities_frame,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="probabilities_table",
-    )
-
-    st.subheader("Certification cases")
-    st.caption(
-        "Column I is the intensity bound for the untrusted/intensity-bounded witness. "
-        "Leave it blank to use the largest selected input intensity. The current bound "
-        "is valid only when I <= m+1; cases outside that regime are rejected."
-    )
-    cases_upload = st.file_uploader("Upload cases CSV", type="csv", key="cases_csv")
-    cases_frame = read_csv_upload(cases_upload, default_cases_frame())
-    cases_frame = st.data_editor(
-        cases_frame,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="cases_table",
-        column_config={
-            "I": st.column_config.NumberColumn(
-                "intensity bound I",
-                help="Optional cap for the intensity-bounded witness. Blank means max selected input intensity.",
-            ),
-        },
-    )
-
-    if st.button("Compute witnesses", type="primary"):
-        try:
-            mus = parse_intensities(intensities_frame)
-            probabilities = parse_probabilities(probabilities_frame)
-            cases = parse_cases(cases_frame)
-        except Exception as exc:
-            st.error(f"Could not parse inputs: {exc}")
-            return
-
-        if not cases:
-            st.error("At least one certification case is required.")
-            return
-        if not validate_inputs(mus, probabilities, cases):
-            return
-
-        guesses = observed_guess_map(probabilities, cases, use_manuscript_values)
-        try:
-            rows = R.build_certification_table(
-                mus=mus,
-                cases=cases,
-                measurement_probabilities=probabilities,
-                observed_guesses=guesses,
+    with data_tab:
+        left, right = st.columns([1, 2])
+        with left:
+            st.subheader("Input intensities")
+            intensity_upload = st.file_uploader("Upload intensity CSV", type="csv", key="intensity_csv")
+            intensities_frame = read_csv_upload(intensity_upload, default_intensities_frame())
+            intensities_frame = st.data_editor(
+                intensities_frame,
+                num_rows="dynamic",
+                use_container_width=True,
+                key="intensities_table",
             )
-        except Exception as exc:
-            st.error(f"Could not compute witnesses: {exc}")
-            return
+        with right:
+            st.subheader("Click probabilities")
+            probability_upload = st.file_uploader("Upload probability CSV", type="csv", key="probability_csv")
+            probability_column_count = st.number_input(
+                "Number of probability columns",
+                min_value=1,
+                max_value=100,
+                value=DEFAULT_PROBABILITY_COLUMN_COUNT,
+                step=1,
+                disabled=probability_upload is not None,
+            )
+            probabilities_frame = read_csv_upload(
+                probability_upload,
+                default_probabilities_frame(int(probability_column_count)),
+            )
+            probabilities_frame = st.data_editor(
+                probabilities_frame,
+                num_rows="dynamic",
+                use_container_width=True,
+                key="probabilities_table",
+            )
 
-        result = rows_to_frame(rows, cases, mus)
-        st.subheader("Results")
-        st.dataframe(
-            result,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "input I": st.column_config.NumberColumn(format="%.4f"),
-                "I used": st.column_config.NumberColumn(format="%.4f"),
-                "trusted bound [%]": st.column_config.NumberColumn(format="%.2f"),
-                "intensity-bound [%]": st.column_config.NumberColumn(format="%.2f"),
-                "P_guess [%]": st.column_config.NumberColumn(format="%.2f"),
-                "trusted eta_* [%]": st.column_config.NumberColumn(format="%.2f"),
-                "intensity eta_* [%]": st.column_config.NumberColumn(format="%.2f"),
-            },
-        )
+    with cases_tab:
+        with st.expander("Advanced certification cases", expanded=False):
+            cases_upload = st.file_uploader("Upload cases CSV", type="csv", key="cases_csv")
+            cases_frame = read_csv_upload(cases_upload, default_cases_frame())
+            cases_frame = st.data_editor(
+                cases_frame,
+                num_rows="dynamic",
+                use_container_width=True,
+                key="cases_table",
+                column_config={
+                    "I": st.column_config.NumberColumn(
+                        "intensity bound I",
+                        help="Blank means max selected input intensity.",
+                    ),
+                },
+            )
+
+    with st.sidebar:
+        compute_requested = st.button("Compute witnesses", type="primary", use_container_width=True)
+
+    with results_tab:
+        if compute_requested:
+            result = compute_results(
+                intensities_frame=intensities_frame,
+                probabilities_frame=probabilities_frame,
+                cases_frame=cases_frame,
+                use_manuscript_values=use_manuscript_values,
+            )
+            if result is not None:
+                st.session_state["result_frame"] = result
+                st.success("Computation complete.")
+
+        result_frame = st.session_state["result_frame"]
+        if result_frame is None:
+            st.info("No computed results.")
+        else:
+            render_dashboard(result_frame)
+
+    with export_tab:
+        result_frame = st.session_state["result_frame"]
+        if result_frame is None:
+            st.info("No computed results.")
+        else:
+            latex_table = latex_results_table(result_frame)
+            csv_data = result_frame.to_csv(index=False).encode("utf-8")
+            col_csv, col_tex = st.columns(2)
+            with col_csv:
+                st.download_button(
+                    "Download CSV",
+                    data=csv_data,
+                    file_name="pnr_certification_results.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+            with col_tex:
+                st.download_button(
+                    "Download LaTeX",
+                    data=latex_table,
+                    file_name="pnr_certification_results.tex",
+                    mime="text/plain",
+                    use_container_width=True,
+                )
+            st.subheader("LaTeX table")
+            st.code(latex_table, language="latex")
 
 
 if __name__ == "__main__":
