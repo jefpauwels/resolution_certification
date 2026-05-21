@@ -1,6 +1,6 @@
 r"""Resolution workflow for measurement-outcome certification.
 
-This module consolidates the three numerical tasks required for the paper:
+This module consolidates the numerical tasks required for the paper:
 
 1. Trusted calibration witnesses (Methods: "Derivation of resolution witness
    bounds"):
@@ -18,6 +18,10 @@ This module consolidates the three numerical tasks required for the paper:
    Build and solve the sparse linear programs that decide whether an
    efficiency-limited detector is simulable with ``R`` outcomes and tabulate
    the threshold efficiencies in Table 1 of the manuscript.
+4. Certified efficiencies:
+   Given an observed guessing probability, solve for the efficiency-limited
+   PNR benchmark that matches the score in either the trusted or
+   intensity-bounded source model.
 
 Only ``numpy`` and ``scipy`` are required beyond the Python standard library.
 Docstrings and comments refer to the section titles used in the manuscript.
@@ -31,6 +35,7 @@ from math import comb, exp, lgamma, log
 from typing import Dict, Iterable, Iterator, List, Sequence, Tuple
 
 import numpy as np
+from numpy.polynomial import polynomial as poly
 from scipy.optimize import linprog, minimize
 from scipy.sparse import csr_matrix
 from scipy.special import gammaincc, gammaln
@@ -104,6 +109,8 @@ class CertificationRow:
     untrusted_bound: float
     untrusted_full_space: float
     experimental_guess: float | None = None
+    trusted_efficiency: float | None = None
+    untrusted_efficiency: float | None = None
 
     def certified_resolution_trusted(self) -> int | None:
         """Return certified resolution (trusted scenario) if data is available."""
@@ -342,6 +349,267 @@ def solve_efficiency_for_target(
         else:
             high = mid
     return 0.5 * (low + high)
+
+
+# ---------------------------------------------------------------------------
+# Certified efficiency benchmarks
+
+
+def _validate_efficiency(efficiency: float) -> None:
+    if not 0.0 <= efficiency <= 1.0:
+        raise ValueError("efficiency must lie in [0, 1]")
+
+
+def _max_poisson_tail(
+    mus: Sequence[float],
+    n_min: int,
+    tol: float = 1e-15,
+    max_terms: int = 100_000,
+) -> float:
+    """Return ``sum_{n=n_min}^∞ max_i q(n|mu_i)`` by a controlled tail sum."""
+
+    if not mus:
+        raise ValueError("mus cannot be empty")
+    if n_min < 0:
+        raise ValueError("n_min must be non-negative")
+    max_mu = max(mus)
+    total = 0.0
+    n = n_min
+    for _ in range(max_terms):
+        term = max(poisson_pmf(n, mu) for mu in mus)
+        total += term
+        if n > max_mu and term < tol:
+            return total
+        n += 1
+    raise RuntimeError("Poisson max-tail sum did not converge")
+
+
+def _efficiency_limited_click_probability(mu: float, max_photons: int, efficiency: float, clicks: int) -> float:
+    """Probability of ``clicks`` for the efficiency-limited PNR benchmark inside ``n <= m``."""
+
+    if clicks < 0 or clicks > max_photons:
+        return 0.0
+    return sum(
+        poisson_pmf(n, mu)
+        * comb(n, clicks)
+        * efficiency**clicks
+        * (1.0 - efficiency) ** (n - clicks)
+        for n in range(clicks, max_photons + 1)
+    )
+
+
+def trusted_subspace_efficiency_benchmark(
+    mus: Sequence[float],
+    max_photons: int,
+    efficiency: float,
+    denominator: int | None = None,
+) -> float:
+    r"""Return the trusted-source efficiency-limited benchmark ``F_m,N,{mu}(eta)``.
+
+    The coherent-state intensities are fixed and known. Photon numbers above
+    ``max_photons`` are treated by the same conservative outside-subspace term
+    used in the subspace witness.
+    """
+
+    if not mus:
+        raise ValueError("mus cannot be empty")
+    if max_photons < 0:
+        raise ValueError("max_photons must be non-negative")
+    _validate_efficiency(efficiency)
+    denom = denominator if denominator is not None else len(mus)
+    if denom <= 0:
+        raise ValueError("denominator must be positive")
+
+    inside = 0.0
+    for clicks in range(max_photons + 1):
+        inside += max(
+            _efficiency_limited_click_probability(mu, max_photons, efficiency, clicks)
+            for mu in mus
+        )
+    tail = _max_poisson_tail(mus, max_photons + 1)
+    return float((inside + tail) / denom)
+
+
+def _solve_efficiency_bisection(
+    benchmark,
+    observed_probability: float,
+    tol: float,
+    max_iter: int,
+) -> float:
+    """Solve ``benchmark(eta) = observed_probability`` on ``eta in [0, 1]``."""
+
+    if not 0.0 <= observed_probability <= 1.0:
+        raise ValueError("observed_probability must lie in [0, 1]")
+    low, high = 0.0, 1.0
+    p_low, p_high = benchmark(low), benchmark(high)
+    if observed_probability < p_low - tol or observed_probability > p_high + tol:
+        raise ValueError(
+            "Target probability outside the achievable range "
+            f"[{p_low:.12g}, {p_high:.12g}]"
+        )
+    if observed_probability <= p_low + tol:
+        return low
+    if observed_probability >= p_high - tol:
+        return high
+    for _ in range(max_iter):
+        mid = 0.5 * (low + high)
+        p_mid = benchmark(mid)
+        if abs(p_mid - observed_probability) <= tol:
+            return mid
+        if p_mid < observed_probability:
+            low = mid
+        else:
+            high = mid
+    return 0.5 * (low + high)
+
+
+def solve_trusted_subspace_efficiency(
+    mus: Sequence[float],
+    observed_probability: float,
+    max_photons: int,
+    denominator: int | None = None,
+    tol: float = 1e-10,
+    max_iter: int = 100,
+) -> float:
+    """Return the certified efficiency for fixed calibrated intensities."""
+
+    return _solve_efficiency_bisection(
+        lambda eta: trusted_subspace_efficiency_benchmark(
+            mus=mus,
+            max_photons=max_photons,
+            efficiency=eta,
+            denominator=denominator,
+        ),
+        observed_probability=observed_probability,
+        tol=tol,
+        max_iter=max_iter,
+    )
+
+
+def _efficiency_block_polynomial(mask: int, max_photons: int, efficiency: float) -> np.ndarray:
+    """Return ``P`` such that ``sum_{b in mask} p_eta(b|mu) = exp(-mu) P(mu)``."""
+
+    coeffs = np.zeros(max_photons + 1, dtype=float)
+    for n in range(max_photons + 1):
+        total = 0.0
+        for clicks in range(n + 1):
+            if mask & (1 << clicks):
+                total += comb(n, clicks) * efficiency**clicks * (1.0 - efficiency) ** (n - clicks)
+        coeffs[n] = total / exp(lgamma(n + 1))
+    return coeffs
+
+
+def _exp_polynomial_value(mu: float, coeffs: np.ndarray) -> float:
+    return float(exp(-mu) * poly.polyval(mu, coeffs))
+
+
+def _max_exp_polynomial_on_interval(coeffs: np.ndarray, intensity_cap: float) -> float:
+    """Maximize ``exp(-mu) P(mu)`` on ``0 <= mu <= intensity_cap``."""
+
+    derivative = poly.polyder(coeffs)
+    stationary = np.zeros_like(coeffs)
+    stationary[: len(derivative)] += derivative
+    stationary[: len(coeffs)] -= coeffs
+
+    candidates = [0.0, float(intensity_cap)]
+    trimmed = poly.polytrim(stationary, tol=1e-14)
+    if len(trimmed) > 1:
+        for root in poly.polyroots(trimmed):
+            if abs(root.imag) <= 1e-8:
+                mu = float(root.real)
+                if -1e-10 <= mu <= intensity_cap + 1e-10:
+                    candidates.append(min(max(mu, 0.0), float(intensity_cap)))
+    return max(_exp_polynomial_value(mu, coeffs) for mu in candidates)
+
+
+def _untrusted_efficiency_inside_value(
+    num_inputs: int,
+    max_photons: int,
+    intensity_cap: float,
+    efficiency: float,
+) -> float:
+    """Optimize the inside-subspace benchmark over unknown bounded intensities."""
+
+    num_outputs = max_photons + 1
+    full_mask = (1 << num_outputs) - 1
+    block_values = np.zeros(full_mask + 1, dtype=float)
+    for mask in range(1, full_mask + 1):
+        coeffs = _efficiency_block_polynomial(mask, max_photons, efficiency)
+        block_values[mask] = _max_exp_polynomial_on_interval(coeffs, intensity_cap)
+
+    memo: Dict[Tuple[int, int], float] = {}
+
+    def best_partition(mask: int, groups_left: int) -> float:
+        key = (mask, groups_left)
+        if key in memo:
+            return memo[key]
+        if mask == 0:
+            value = 0.0
+        elif groups_left == 0:
+            value = -float("inf")
+        else:
+            first_bit = mask & -mask
+            value = -float("inf")
+            submask = mask
+            while submask:
+                if submask & first_bit:
+                    value = max(
+                        value,
+                        block_values[submask] + best_partition(mask ^ submask, groups_left - 1),
+                    )
+                submask = (submask - 1) & mask
+        memo[key] = value
+        return value
+
+    return best_partition(full_mask, min(num_inputs, num_outputs))
+
+
+def untrusted_subspace_efficiency_benchmark(
+    num_inputs: int,
+    max_photons: int,
+    intensity_cap: float,
+    efficiency: float,
+) -> float:
+    r"""Return the intensity-bounded efficiency-limited benchmark ``F_m,N,I(eta)``."""
+
+    if num_inputs <= 0:
+        raise ValueError("num_inputs must be positive")
+    if max_photons < 0:
+        raise ValueError("max_photons must be non-negative")
+    if intensity_cap <= 0:
+        raise ValueError("intensity_cap must be positive")
+    if intensity_cap > max_photons + 1 + 1e-12:
+        raise ValueError(
+            "The untrusted subspace efficiency benchmark requires I <= m+1; "
+            f"got I={intensity_cap:g} for m={max_photons}."
+        )
+    _validate_efficiency(efficiency)
+    inside = _untrusted_efficiency_inside_value(num_inputs, max_photons, intensity_cap, efficiency)
+    tail = poisson_tail(max_photons + 1, intensity_cap)
+    return float((inside + tail) / num_inputs)
+
+
+def solve_untrusted_subspace_efficiency(
+    num_inputs: int,
+    max_photons: int,
+    intensity_cap: float,
+    observed_probability: float,
+    tol: float = 1e-10,
+    max_iter: int = 100,
+) -> float:
+    """Return the certified efficiency when only an intensity bound is trusted."""
+
+    return _solve_efficiency_bisection(
+        lambda eta: untrusted_subspace_efficiency_benchmark(
+            num_inputs=num_inputs,
+            max_photons=max_photons,
+            intensity_cap=intensity_cap,
+            efficiency=eta,
+        ),
+        observed_probability=observed_probability,
+        tol=tol,
+        max_iter=max_iter,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -848,6 +1116,21 @@ def build_certification_table(
             experimental_value = observed_guesses[case.num_inputs]
         elif measurement_probabilities is not None:
             experimental_value = experimental_guessing_probability(measurement_probabilities, case.num_inputs)
+        trusted_efficiency = None
+        untrusted_efficiency = None
+        if experimental_value is not None:
+            trusted_efficiency = solve_trusted_subspace_efficiency(
+                subset,
+                observed_probability=experimental_value,
+                max_photons=case.max_photons,
+                denominator=case.num_inputs,
+            )
+            untrusted_efficiency = solve_untrusted_subspace_efficiency(
+                num_inputs=case.num_inputs,
+                max_photons=case.max_photons,
+                intensity_cap=cap,
+                observed_probability=experimental_value,
+            )
         rows.append(
             CertificationRow(
                 num_inputs=case.num_inputs,
@@ -857,6 +1140,8 @@ def build_certification_table(
                 untrusted_bound=untrusted,
                 untrusted_full_space=untrusted_global,
                 experimental_guess=experimental_value,
+                trusted_efficiency=trusted_efficiency,
+                untrusted_efficiency=untrusted_efficiency,
             )
         )
     return rows
@@ -879,9 +1164,15 @@ def format_certification_table(rows: Sequence[CertificationRow]) -> str:
     if not rows:
         return ""
     include_guess = any(row.experimental_guess is not None for row in rows)
+    include_efficiency = any(
+        row.trusted_efficiency is not None or row.untrusted_efficiency is not None
+        for row in rows
+    )
     header = ["m", "N", "R", "Trusted [%]", "Int-bound (subspace) [%]", "Int-bound (global) [%]"]
     if include_guess:
         header.extend(["P_guess [%]", "cert. trusted", "cert. intensity"])
+    if include_efficiency:
+        header.extend(["eta trusted [%]", "eta intensity [%]"])
     lines = [" | ".join(header)]
     for row in rows:
         base = [
@@ -899,6 +1190,11 @@ def format_certification_table(rows: Sequence[CertificationRow]) -> str:
             cert_intensity = row.certified_resolution_intensity()
             base.append(f"{cert_trusted:13d}" if cert_trusted is not None else "      -     ")
             base.append(f"{cert_intensity:15d}" if cert_intensity is not None else "       -       ")
+        if include_efficiency:
+            eta_trusted = None if row.trusted_efficiency is None else row.trusted_efficiency * 100
+            eta_intensity = None if row.untrusted_efficiency is None else row.untrusted_efficiency * 100
+            base.append(f"{eta_trusted:15.2f}" if eta_trusted is not None else "       -       ")
+            base.append(f"{eta_intensity:17.2f}" if eta_intensity is not None else "        -        ")
         lines.append(" | ".join(base))
     return "\n".join(lines)
 

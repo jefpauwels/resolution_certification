@@ -52,6 +52,34 @@ def check_effective_efficiencies() -> None:
         assert_percent(f"eta N={num_inputs}", eta, expected_eta)
 
 
+def check_certified_efficiencies() -> None:
+    expected = {
+        1: (86.89, 85.92),
+        2: (82.54, 81.66),
+        3: (84.20, 84.18),
+        4: (82.71, 82.65),
+        5: (82.20, 82.07),
+        6: (77.07, 75.15),
+        7: (77.42, 75.43),
+        8: (78.47, 77.16),
+    }
+    rows = R.build_manuscript_certification_table()
+    for row in rows:
+        trusted, untrusted = expected[row.max_photons]
+        if row.trusted_efficiency is None or row.untrusted_efficiency is None:
+            raise AssertionError(f"Missing certified efficiencies for m={row.max_photons}")
+        assert_percent(
+            f"trusted certified eta m={row.max_photons}",
+            row.trusted_efficiency,
+            trusted,
+        )
+        assert_percent(
+            f"intensity certified eta m={row.max_photons}",
+            row.untrusted_efficiency,
+            untrusted,
+        )
+
+
 def check_efficiency_limited_thresholds() -> None:
     table = R.efficiency_resolution_table(n_levels=(2, 3), resolutions=(3, 4), tol=5e-4)
     assert_close("threshold [0..2], R=3", table[2][3], 61.8, 0.1)
@@ -75,6 +103,7 @@ def check_invalid_intensity_cap_is_rejected() -> None:
 def main() -> None:
     check_certification_table()
     check_effective_efficiencies()
+    check_certified_efficiencies()
     check_efficiency_limited_thresholds()
     check_invalid_intensity_cap_is_rejected()
     print("All smoke tests passed.")

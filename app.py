@@ -227,6 +227,12 @@ def rows_to_frame(
                 "trusted bound [%]": 100.0 * row.trusted_bound,
                 "intensity-bound [%]": 100.0 * row.untrusted_bound,
                 "P_guess [%]": None if p_guess is None else 100.0 * p_guess,
+                "trusted eta_* [%]": (
+                    None if row.trusted_efficiency is None else 100.0 * row.trusted_efficiency
+                ),
+                "intensity eta_* [%]": (
+                    None if row.untrusted_efficiency is None else 100.0 * row.untrusted_efficiency
+                ),
                 "trusted certified resolution": row.certified_resolution_trusted(),
                 "intensity certified resolution": row.certified_resolution_intensity(),
             }
@@ -337,6 +343,8 @@ def main() -> None:
                 "trusted bound [%]": st.column_config.NumberColumn(format="%.2f"),
                 "intensity-bound [%]": st.column_config.NumberColumn(format="%.2f"),
                 "P_guess [%]": st.column_config.NumberColumn(format="%.2f"),
+                "trusted eta_* [%]": st.column_config.NumberColumn(format="%.2f"),
+                "intensity eta_* [%]": st.column_config.NumberColumn(format="%.2f"),
             },
         )
 
