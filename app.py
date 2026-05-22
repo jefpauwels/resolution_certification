@@ -250,21 +250,34 @@ def certification_status(observed: float | None, bound: float) -> str | None:
 
 def result_column_config() -> dict[str, object]:
     return {
-        "input I": st.column_config.NumberColumn(format="%.4f"),
-        "I used": st.column_config.NumberColumn(format="%.4f"),
-        "trusted bound [%]": st.column_config.NumberColumn(format="%.2f"),
-        "intensity-bound [%]": st.column_config.NumberColumn(format="%.2f"),
-        "P_guess [%]": st.column_config.NumberColumn(format="%.2f"),
-        "trusted eta_* [%]": st.column_config.NumberColumn(format="%.2f"),
-        "intensity eta_* [%]": st.column_config.NumberColumn(format="%.2f"),
-    }
-
-
-def certification_column_config() -> dict[str, object]:
-    return {
-        "trusted bound [%]": st.column_config.NumberColumn(format="%.2f"),
-        "intensity-bound [%]": st.column_config.NumberColumn(format="%.2f"),
-        "P_guess [%]": st.column_config.NumberColumn(format="%.2f"),
+        "input I": st.column_config.NumberColumn(
+            format="%.4f",
+            help=r"Optional certified intensity bound $I$ entered for the case.",
+        ),
+        "I used": st.column_config.NumberColumn(
+            format="%.4f",
+            help=r"Intensity bound $I$ used for the intensity-bounded witness.",
+        ),
+        "trusted bound [%]": st.column_config.NumberColumn(
+            format="%.2f",
+            help=r"Trusted-calibration bound on $P_{\rm guess}$.",
+        ),
+        "intensity-bound [%]": st.column_config.NumberColumn(
+            format="%.2f",
+            help=r"Intensity-bounded bound on $P_{\rm guess}$.",
+        ),
+        "P_guess [%]": st.column_config.NumberColumn(
+            format="%.2f",
+            help=r"Observed guessing probability $P_{\rm guess}$.",
+        ),
+        "trusted eta_* [%]": st.column_config.NumberColumn(
+            format="%.2f",
+            help=r"Certified efficiency $\eta_\ast$ from the trusted-calibration benchmark.",
+        ),
+        "intensity eta_* [%]": st.column_config.NumberColumn(
+            format="%.2f",
+            help=r"Certified efficiency $\eta_\ast$ from the intensity-bounded benchmark.",
+        ),
     }
 
 
@@ -294,61 +307,90 @@ def render_metric_row(frame: pd.DataFrame) -> None:
     case_count.metric("Cases", f"{len(frame)}")
     trusted_res.metric("Max trusted resolution", metric_value(frame["trusted certified resolution"].max()))
     intensity_res.metric("Max intensity resolution", metric_value(frame["intensity certified resolution"].max()))
-    eta.metric("Best eta_*", metric_value(best_efficiency(frame), "%"))
+    eta.metric(r"Best $\eta_\ast$", metric_value(best_efficiency(frame), "%"))
 
 
-def bounds_chart_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    return (
-        frame[["m", "P_guess [%]", "trusted bound [%]", "intensity-bound [%]"]]
-        .rename(
-            columns={
-                "P_guess [%]": "P_guess",
-                "trusted bound [%]": "trusted bound",
-                "intensity-bound [%]": "intensity bound",
-            }
-        )
-        .set_index("m")
+def grouped_bar_data(frame: pd.DataFrame, value_columns: dict[str, str]) -> pd.DataFrame:
+    data = frame[["m", *value_columns.keys()]].rename(columns=value_columns)
+    return data.melt(id_vars="m", var_name="quantity", value_name="value").dropna()
+
+
+def render_grouped_bar_chart(
+    data: pd.DataFrame,
+    *,
+    y_title: str,
+    y_domain: list[float] | None = None,
+) -> None:
+    y_encoding: dict[str, object] = {
+        "field": "value",
+        "type": "quantitative",
+        "title": y_title,
+        "stack": None,
+    }
+    if y_domain is not None:
+        y_encoding["scale"] = {"domain": y_domain}
+
+    st.vega_lite_chart(
+        data,
+        {
+            "mark": {"type": "bar", "tooltip": True},
+            "encoding": {
+                "x": {
+                    "field": "m",
+                    "type": "ordinal",
+                    "title": "subspace cutoff m",
+                    "sort": [int(value) for value in sorted(data["m"].unique().tolist())],
+                },
+                "xOffset": {"field": "quantity", "type": "nominal"},
+                "y": y_encoding,
+                "color": {
+                    "field": "quantity",
+                    "type": "nominal",
+                    "title": None,
+                    "scale": {
+                        "range": ["#2E6F9E", "#D97706", "#4B5563"],
+                    },
+                },
+                "tooltip": [
+                    {"field": "m", "type": "ordinal", "title": "m"},
+                    {"field": "quantity", "type": "nominal", "title": "quantity"},
+                    {"field": "value", "type": "quantitative", "title": y_title, "format": ".2f"},
+                ],
+            },
+        },
+        use_container_width=True,
     )
-
-
-def efficiency_chart_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    return (
-        frame[["m", "trusted eta_* [%]", "intensity eta_* [%]"]]
-        .rename(
-            columns={
-                "trusted eta_* [%]": "trusted eta_*",
-                "intensity eta_* [%]": "intensity eta_*",
-            }
-        )
-        .set_index("m")
-    )
-
-
-def certification_table_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    return frame[
-        [
-            "m",
-            "N",
-            "R",
-            "trusted bound [%]",
-            "intensity-bound [%]",
-            "P_guess [%]",
-            "trusted certified resolution",
-            "intensity certified resolution",
-            "trusted status",
-            "intensity status",
-        ]
-    ].copy()
 
 
 def render_bar_plots(frame: pd.DataFrame) -> None:
     left, right = st.columns(2)
     with left:
-        st.subheader("Guessing probability")
-        st.bar_chart(bounds_chart_frame(frame))
+        st.subheader(r"Guessing probability $P_{\rm guess}$")
+        render_grouped_bar_chart(
+            grouped_bar_data(
+                frame,
+                {
+                    "P_guess [%]": "P_guess",
+                    "trusted bound [%]": "trusted bound",
+                    "intensity-bound [%]": "intensity bound",
+                },
+            ),
+            y_title="probability [%]",
+            y_domain=[0, 100],
+        )
     with right:
-        st.subheader("Certified efficiency")
-        st.bar_chart(efficiency_chart_frame(frame))
+        st.subheader(r"Certified efficiency $\eta_\ast$")
+        render_grouped_bar_chart(
+            grouped_bar_data(
+                frame,
+                {
+                    "trusted eta_* [%]": "trusted eta_*",
+                    "intensity eta_* [%]": "intensity eta_*",
+                },
+            ),
+            y_title="eta_* [%]",
+            y_domain=[0, 100],
+        )
 
 
 def render_dashboard(frame: pd.DataFrame) -> None:
@@ -356,15 +398,7 @@ def render_dashboard(frame: pd.DataFrame) -> None:
 
     render_bar_plots(frame)
 
-    st.subheader("Resolution certification")
-    st.dataframe(
-        certification_table_frame(frame),
-        use_container_width=True,
-        hide_index=True,
-        column_config=certification_column_config(),
-    )
-
-    st.subheader("Full numerical table")
+    st.subheader("Certification table")
     st.dataframe(
         frame,
         use_container_width=True,
@@ -456,12 +490,24 @@ def main() -> None:
     st.title("PNR Resolution Certification")
 
     with st.sidebar:
+        with st.expander("How to use and cite", expanded=True):
+            st.markdown(
+                r"""
+Enter input intensities $\mu_i$ and click probabilities $p(b|\mu_i)$ in Data,
+choose cases $(N,m,R,I)$ in Cases, then click Compute witnesses. The app reports
+$P_{\rm guess}$, trusted and intensity-bounded bounds, certified resolution, and
+certified $\eta_\ast$.
+
+Method: [PAPER PLACEHOLDER]. If you use this tool, please cite that paper.
+"""
+            )
+
         st.header("Options")
         use_manuscript_values = st.checkbox(
-            "Use exact manuscript P_guess values when available",
+            r"Use exact manuscript $P_{\rm guess}$ values when available",
             value=True,
-            help="For the bundled example data this reproduces the manuscript table. "
-            "Turn this off to compute P_guess directly from the probability table.",
+            help=r"For the bundled example data this reproduces the manuscript table. "
+            r"Turn this off to compute $P_{\rm guess}$ directly from the probability table.",
         )
 
     results_tab, data_tab, cases_tab, export_tab = st.tabs(["Results", "Data", "Cases", "Export"])
@@ -469,7 +515,7 @@ def main() -> None:
     with data_tab:
         left, right = st.columns([1, 2])
         with left:
-            st.subheader("Input intensities")
+            st.subheader(r"Input intensities $\mu_i$")
             intensity_upload = st.file_uploader("Upload intensity CSV", type="csv", key="intensity_csv")
             intensities_frame = read_csv_upload(intensity_upload, default_intensities_frame())
             intensities_frame = st.data_editor(
@@ -479,7 +525,7 @@ def main() -> None:
                 key="intensities_table",
             )
         with right:
-            st.subheader("Click probabilities")
+            st.subheader(r"Click probabilities $p(b|\mu_i)$")
             probability_upload = st.file_uploader("Upload probability CSV", type="csv", key="probability_csv")
             probability_column_count = st.number_input(
                 "Number of probability columns",
@@ -501,7 +547,7 @@ def main() -> None:
             )
 
     with cases_tab:
-        with st.expander("Advanced certification cases", expanded=False):
+        with st.expander(r"Advanced certification cases $(N,m,R,I)$", expanded=False):
             cases_upload = st.file_uploader("Upload cases CSV", type="csv", key="cases_csv")
             cases_frame = read_csv_upload(cases_upload, default_cases_frame())
             cases_frame = st.data_editor(
@@ -512,7 +558,7 @@ def main() -> None:
                 column_config={
                     "I": st.column_config.NumberColumn(
                         "intensity bound I",
-                        help="Blank means max selected input intensity.",
+                        help=r"Blank means max selected input intensity; otherwise enter the certified bound $I$.",
                     ),
                 },
             )
