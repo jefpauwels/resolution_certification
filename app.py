@@ -547,6 +547,11 @@ Method: [PAPER PLACEHOLDER]. If you use this tool, please cite that paper.
             )
 
     with cases_tab:
+        st.info(
+            r"For intensity-bounded rows, leaving $I$ blank makes the app use "
+            r"$\max_i \mu_i$ over the selected inputs. To be conservative under "
+            r"calibration uncertainty, enter an upper calibration bound for $I$."
+        )
         with st.expander(r"Advanced certification cases $(N,m,R,I)$", expanded=False):
             cases_upload = st.file_uploader("Upload cases CSV", type="csv", key="cases_csv")
             cases_frame = read_csv_upload(cases_upload, default_cases_frame())
