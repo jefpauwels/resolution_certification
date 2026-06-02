@@ -87,17 +87,32 @@ def check_efficiency_limited_thresholds() -> None:
     assert_close("threshold [0..3], R=4", table[3][4], 81.1, 0.1)
 
 
-def check_invalid_intensity_cap_is_rejected() -> None:
-    try:
-        R.build_certification_table(
-            mus=(0.0, 1.0),
-            cases=(R.CertificationConfig(num_inputs=2, max_photons=1, resolution=1, intensity_cap=3.0),),
-        )
-    except ValueError as exc:
-        if "I <= m+1" not in str(exc):
-            raise AssertionError(f"Unexpected error for invalid intensity cap: {exc}") from exc
-    else:
-        raise AssertionError("Expected invalid intensity cap I > m+1 to be rejected")
+def check_generalized_tail() -> None:
+    old_tail = R.poisson_tail(4, 3.2)
+    new_tail = R.worst_case_poisson_tail(4, 3.2)
+    assert_close("generalized tail reduces to Poisson tail", new_tail, old_tail, 1e-14)
+
+
+def check_safety_margin_intensity_caps() -> None:
+    cases = (
+        R.CertificationConfig(num_inputs=6, max_photons=6, resolution=3, intensity_cap=1.03 * 6.9896),
+        R.CertificationConfig(num_inputs=7, max_photons=7, resolution=3, intensity_cap=1.03 * 7.9741),
+    )
+    rows = R.build_certification_table(
+        mus=experimental_data.INTENSITIES,
+        cases=cases,
+        observed_guesses=experimental_data.OBSERVED_GUESSING_PROBABILITIES,
+    )
+    expected = {
+        6: (47.09, 72.04),
+        7: (41.59, 72.38),
+    }
+    for row in rows:
+        bound, eta = expected[row.max_photons]
+        assert_percent(f"3% safety bound m={row.max_photons}", row.untrusted_bound, bound)
+        assert_percent(f"3% safety eta m={row.max_photons}", row.untrusted_efficiency or 0.0, eta)
+        if row.certified_resolution_intensity() != 3:
+            raise AssertionError(f"Unexpected 3% safety certified resolution for m={row.max_photons}")
 
 
 def main() -> None:
@@ -105,7 +120,8 @@ def main() -> None:
     check_effective_efficiencies()
     check_certified_efficiencies()
     check_efficiency_limited_thresholds()
-    check_invalid_intensity_cap_is_rejected()
+    check_generalized_tail()
+    check_safety_margin_intensity_caps()
     print("All smoke tests passed.")
 
 

@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass
-from math import comb, exp, lgamma, log
+from math import comb, exp, floor, lgamma, log
 from typing import Dict, Iterable, Iterator, List, Sequence, Tuple
 
 import numpy as np
@@ -180,6 +180,26 @@ def poisson_tail(n_min: int, mu: float, tol: float = 1e-15, max_terms: int = 10_
         term *= mu / n
         total += term
     return total
+
+
+def worst_case_poisson_tail(n_min: int, mu_cap: float) -> float:
+    r"""Return ``sum_{n=n_min}^∞ max_{0 <= mu <= mu_cap} q(n|mu)``.
+
+    For fixed ``n``, the Poisson mass is maximized at ``mu=n``. If the allowed
+    intensity interval is capped at ``mu_cap``, the maximizing mean is therefore
+    ``min(n, mu_cap)``. When ``mu_cap <= n_min``, this reduces to the ordinary
+    Poisson tail at ``mu_cap``.
+    """
+
+    if n_min < 0:
+        raise ValueError("n_min must be non-negative")
+    if mu_cap < 0:
+        raise ValueError("mu_cap must be non-negative")
+    upper = int(floor(mu_cap))
+    if upper < n_min:
+        return poisson_tail(n_min, mu_cap)
+    finite = sum(poisson_pmf(n, float(n)) for n in range(n_min, upper + 1))
+    return finite + poisson_tail(upper + 1, mu_cap)
 
 
 def pmf_table(mus: Sequence[float], n_max: int, loss: float = 1.0) -> np.ndarray:
@@ -570,7 +590,11 @@ def untrusted_subspace_efficiency_benchmark(
     intensity_cap: float,
     efficiency: float,
 ) -> float:
-    r"""Return the intensity-bounded efficiency-limited benchmark ``F_m,N,I(eta)``."""
+    r"""Return the intensity-bounded efficiency-limited benchmark ``F_m,N,I(eta)``.
+
+    The out-of-subspace contribution uses the generalized worst-case tail, so
+    intensity caps larger than ``m+1`` remain valid but can give looser bounds.
+    """
 
     if num_inputs <= 0:
         raise ValueError("num_inputs must be positive")
@@ -578,14 +602,9 @@ def untrusted_subspace_efficiency_benchmark(
         raise ValueError("max_photons must be non-negative")
     if intensity_cap <= 0:
         raise ValueError("intensity_cap must be positive")
-    if intensity_cap > max_photons + 1 + 1e-12:
-        raise ValueError(
-            "The untrusted subspace efficiency benchmark requires I <= m+1; "
-            f"got I={intensity_cap:g} for m={max_photons}."
-        )
     _validate_efficiency(efficiency)
     inside = _untrusted_efficiency_inside_value(num_inputs, max_photons, intensity_cap, efficiency)
-    tail = poisson_tail(max_photons + 1, intensity_cap)
+    tail = worst_case_poisson_tail(max_photons + 1, intensity_cap)
     return float((inside + tail) / num_inputs)
 
 
@@ -847,7 +866,7 @@ def subspace_tail_term(
     intensity_cap: float,
     loss: float,
 ) -> float:
-    """Return the Poisson tail term ``(1/N) * P[n > subspace_cutoff | mu = loss * I]``."""
+    """Return the worst-case out-of-subspace tail term divided by ``N``."""
 
     if num_states <= 0:
         raise ValueError("num_states must be positive")
@@ -855,8 +874,7 @@ def subspace_tail_term(
         raise ValueError("subspace_cutoff must be non-negative")
     if intensity_cap <= 0:
         raise ValueError("intensity_cap must be positive")
-    cdf = float(gammaincc(subspace_cutoff + 1, loss * intensity_cap))
-    return (1.0 / num_states) * (1.0 - cdf)
+    return worst_case_poisson_tail(subspace_cutoff + 1, loss * intensity_cap) / num_states
 
 
 def subspace_witness_table(
@@ -1081,13 +1099,6 @@ def build_certification_table(
         cap = float(case.intensity_cap if case.intensity_cap is not None else max(subset))
         if cap <= 0:
             raise ValueError("Intensity cap must be positive")
-        max_valid_cap = float(case.max_photons + 1)
-        if cap > max_valid_cap + 1e-12:
-            raise ValueError(
-                "The intensity-bounded subspace witness requires I <= m+1; "
-                f"got I={cap:g} for m={case.max_photons}."
-            )
-        cap = min(cap, max_valid_cap)
         full_table = untrusted_witness_table(
             num_states=case.num_inputs,
             intensity_cap=cap,

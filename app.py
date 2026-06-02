@@ -177,12 +177,11 @@ def validate_inputs(
                 )
                 ok = False
             if cap > case.max_photons + 1 + 1e-12:
-                st.error(
+                st.info(
                     f"Case N={case.num_inputs}, m={case.max_photons}, R={case.resolution}: "
-                    f"the intensity-bounded witness requires I <= m+1 = {case.max_photons + 1}, "
-                    f"but I = {cap:g}. Increase m or enter a smaller certified intensity bound."
+                    f"I = {cap:g} exceeds m+1 = {case.max_photons + 1}. "
+                    "The app will use the generalized conservative tail correction."
                 )
-                ok = False
     return ok
 
 
@@ -550,7 +549,8 @@ Method: [PAPER PLACEHOLDER]. If you use this tool, please cite that paper.
         st.info(
             r"For intensity-bounded rows, leaving $I$ blank makes the app use "
             r"$\max_i \mu_i$ over the selected inputs. To be conservative under "
-            r"calibration uncertainty, enter an upper calibration bound for $I$."
+            r"calibration uncertainty, enter an upper calibration bound for $I$. "
+            r"If $I>m+1$, the app uses the generalized conservative tail correction."
         )
         with st.expander(r"Advanced certification cases $(N,m,R,I)$", expanded=False):
             cases_upload = st.file_uploader("Upload cases CSV", type="csv", key="cases_csv")
