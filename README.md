@@ -1,5 +1,7 @@
 # Code for the genuine resolution manuscript
 
+Interactive app: https://resolutioncertification.streamlit.app
+
 This folder contains the code accompanying the genuine resolution manuscript.
 The single computational source file is `Resolution.py`; it contains all
 routines needed to reproduce the numerical tables reported in the manuscript.
