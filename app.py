@@ -547,7 +547,8 @@ Method: [PAPER PLACEHOLDER]. If you use this tool, please cite that paper.
 
     with cases_tab:
         st.info(
-            r"For intensity-bounded rows, leaving $I$ blank makes the app use "
+            r"The bundled manuscript example uses a 3% safety cap by default; "
+            r"edit $I$ to use another calibration bound. For intensity-bounded rows, leaving $I$ blank makes the app use "
             r"$\max_i \mu_i$ over the selected inputs. To be conservative under "
             r"calibration uncertainty, enter an upper calibration bound for $I$. "
             r"If $I>m+1$, the app uses the generalized conservative tail correction."

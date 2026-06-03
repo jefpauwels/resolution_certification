@@ -13,6 +13,10 @@ from __future__ import annotations
 INTENSITIES = (0.0, 1.1574, 2.3386, 3.4774, 4.6532, 6.9896, 7.9741)
 
 
+# Safety factor used for the bundled manuscript intensity-bounded rows.
+INTENSITY_SAFETY_FACTOR = 1.03
+
+
 # Rounded click-probability table reported in the manuscript.
 # Rows follow INTENSITIES. Columns are p(0|mu), ..., p(7|mu), p(>=8|mu).
 CLICK_PROBABILITIES = (
@@ -40,15 +44,16 @@ OBSERVED_GUESSING_PROBABILITIES = {
 
 
 # Certification rows as (num_inputs, max_photons, resolution, intensity_cap).
-# Use intensity_cap=None to take the largest intensity among the selected inputs,
-# which must satisfy the subspace-witness condition I <= max_photons + 1.
+# The bundled manuscript rows use a 3% safety-corrected intensity cap. Users can
+# replace any cap with their own calibration bound, or use intensity_cap=None to
+# take the largest intensity among the selected inputs.
 CERTIFICATION_CASES = (
-    (2, 1, 1, None),
-    (3, 2, 2, None),
-    (3, 3, 2, None),
-    (4, 4, 3, None),
-    (5, 5, 3, None),
-    (6, 6, 3, None),
-    (7, 7, 3, None),
-    (7, 8, 3, None),
+    (2, 1, 1, INTENSITY_SAFETY_FACTOR * INTENSITIES[1]),
+    (3, 2, 2, INTENSITY_SAFETY_FACTOR * INTENSITIES[2]),
+    (3, 3, 2, INTENSITY_SAFETY_FACTOR * INTENSITIES[2]),
+    (4, 4, 3, INTENSITY_SAFETY_FACTOR * INTENSITIES[3]),
+    (5, 5, 3, INTENSITY_SAFETY_FACTOR * INTENSITIES[4]),
+    (6, 6, 3, INTENSITY_SAFETY_FACTOR * INTENSITIES[5]),
+    (7, 7, 3, INTENSITY_SAFETY_FACTOR * INTENSITIES[6]),
+    (7, 8, 3, INTENSITY_SAFETY_FACTOR * INTENSITIES[6]),
 )

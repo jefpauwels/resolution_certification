@@ -17,27 +17,28 @@ def assert_percent(name: str, got: float, expected_percent: float, tol: float = 
 
 def check_certification_table() -> None:
     expected = [
-        (1, 2, 1, 66.10, 66.10, 81.90, True),
-        (2, 3, 2, 66.28, 66.70, 65.16, False),
-        (3, 3, 2, 63.45, 64.49, 65.16, True),
-        (4, 4, 3, 56.23, 56.55, 54.75, False),
-        (5, 5, 3, 48.67, 49.16, 47.98, False),
-        (6, 6, 3, 46.28, 46.57, 45.03, False),
-        (7, 7, 3, 40.87, 41.11, 40.40, False),
-        (8, 7, 3, 39.65, 40.39, 40.40, True),
+        (1, 2, 1, 66.10, 66.73, 81.90, 2, 2),
+        (2, 3, 2, 66.28, 67.32, 65.16, 2, 2),
+        (3, 3, 2, 63.45, 64.97, 65.16, 3, 3),
+        (4, 4, 3, 56.23, 57.04, 54.75, 3, 3),
+        (5, 5, 3, 48.67, 49.64, 47.98, 3, 3),
+        (6, 6, 3, 46.28, 47.09, 45.03, 3, 3),
+        (7, 7, 3, 40.87, 41.59, 40.40, 3, 3),
+        (8, 7, 3, 39.65, 40.86, 40.40, 4, 3),
     ]
     rows = R.build_manuscript_certification_table()
     if len(rows) != len(expected):
         raise AssertionError(f"Expected {len(expected)} certification rows, got {len(rows)}")
-    for row, (m, n_inputs, resolution, trusted, untrusted, observed, certified) in zip(rows, expected):
+    for row, (m, n_inputs, resolution, trusted, untrusted, observed, cert_trusted, cert_intensity) in zip(rows, expected):
         if (row.max_photons, row.num_inputs, row.resolution) != (m, n_inputs, resolution):
             raise AssertionError("Certification row order or labels changed")
         assert_percent(f"trusted m={m}", row.trusted_bound, trusted)
         assert_percent(f"untrusted m={m}", row.untrusted_bound, untrusted)
         assert_percent(f"observed N={n_inputs}", row.experimental_guess or 0.0, observed)
-        is_certified = (row.experimental_guess or 0.0) > row.trusted_bound
-        if is_certified != certified:
-            raise AssertionError(f"Certification flag mismatch for m={m}")
+        if row.certified_resolution_trusted() != cert_trusted:
+            raise AssertionError(f"Trusted certification mismatch for m={m}")
+        if row.certified_resolution_intensity() != cert_intensity:
+            raise AssertionError(f"Intensity-bounded certification mismatch for m={m}")
 
 
 def check_effective_efficiencies() -> None:
@@ -54,14 +55,14 @@ def check_effective_efficiencies() -> None:
 
 def check_certified_efficiencies() -> None:
     expected = {
-        1: (86.89, 85.92),
-        2: (82.54, 81.66),
-        3: (84.20, 84.18),
-        4: (82.71, 82.65),
-        5: (82.20, 82.07),
-        6: (77.07, 75.15),
-        7: (77.42, 75.43),
-        8: (78.47, 77.16),
+        1: (86.89, 82.49),
+        2: (82.54, 78.22),
+        3: (84.20, 81.59),
+        4: (82.71, 80.00),
+        5: (82.20, 79.29),
+        6: (77.07, 72.04),
+        7: (77.42, 72.38),
+        8: (78.47, 74.27),
     }
     rows = R.build_manuscript_certification_table()
     for row in rows:
