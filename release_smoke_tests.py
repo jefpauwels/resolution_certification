@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+
+import pandas as pd
+
+logging.disable(logging.WARNING)
+import app
+logging.disable(logging.NOTSET)
+
 import Resolution as R
 import experimental_data
 
@@ -13,6 +21,16 @@ def assert_close(name: str, got: float, expected: float, tol: float) -> None:
 
 def assert_percent(name: str, got: float, expected_percent: float, tol: float = 0.01) -> None:
     assert_close(name, 100.0 * got, expected_percent, tol)
+
+
+def assert_raises(name: str, expected_error: type[Exception], func) -> None:
+    try:
+        func()
+    except expected_error:
+        return
+    except Exception as exc:
+        raise AssertionError(f"{name}: expected {expected_error.__name__}, got {type(exc).__name__}") from exc
+    raise AssertionError(f"{name}: expected {expected_error.__name__}")
 
 
 def check_certification_table() -> None:
@@ -116,6 +134,58 @@ def check_safety_margin_intensity_caps() -> None:
             raise AssertionError(f"Unexpected 3% safety certified resolution for m={row.max_photons}")
 
 
+def check_app_custom_probabilities_not_overridden() -> None:
+    cases = (R.CertificationConfig(num_inputs=2, max_photons=1, resolution=1, intensity_cap=1.0),)
+    probabilities = ((1.0, 0.0), (1.0, 0.0))
+    use_exact = app.should_use_exact_manuscript_values((0.0, 1.0), probabilities, cases, requested=True)
+    if use_exact:
+        raise AssertionError("Custom data incorrectly matched bundled manuscript data")
+    observed = app.observed_guess_map(probabilities, cases, use_exact)
+    assert_close("custom app P_guess", observed[2], 0.5, 1e-14)
+
+
+def check_app_bundled_manuscript_values_available() -> None:
+    mus = app.parse_intensities(app.default_intensities_frame())
+    probabilities = app.parse_probabilities(app.default_probabilities_frame())
+    cases = app.parse_cases(app.default_cases_frame())
+    use_exact = app.should_use_exact_manuscript_values(mus, probabilities, cases, requested=True)
+    if not use_exact:
+        raise AssertionError("Bundled manuscript data was not recognized")
+    observed = app.observed_guess_map(probabilities, cases, use_exact)
+    assert_close("bundled exact P_guess N=2", observed[2], 0.8190, 1e-14)
+
+
+def check_app_rejects_nonnumeric_cells() -> None:
+    assert_raises(
+        "nonnumeric probability cell",
+        ValueError,
+        lambda: app.parse_probabilities(pd.DataFrame({"p0": ["bad"], "p1": [1.0]})),
+    )
+    assert_raises(
+        "nonnumeric intensity cell",
+        ValueError,
+        lambda: app.parse_intensities(pd.DataFrame({"mu": [0.0, "bad"]})),
+    )
+
+
+def check_app_rejects_partial_cases() -> None:
+    assert_raises(
+        "partial certification case",
+        ValueError,
+        lambda: app.parse_cases(pd.DataFrame({"N": [2], "m": [1], "R": [""], "I": [""]})),
+    )
+    blank_cases = app.parse_cases(pd.DataFrame({"N": [""], "m": [""], "R": [""], "I": [""]}))
+    if blank_cases:
+        raise AssertionError("Blank case rows should be ignored")
+
+
+def check_app_rejects_resolution_above_subspace_dimension() -> None:
+    case = R.CertificationConfig(num_inputs=2, max_photons=0, resolution=2, intensity_cap=1.0)
+    errors = app.case_validation_errors(case, num_intensities=2, num_probability_rows=2)
+    if not any("R cannot exceed m+1" in error for error in errors):
+        raise AssertionError("Expected R > m+1 validation error")
+
+
 def main() -> None:
     check_certification_table()
     check_effective_efficiencies()
@@ -123,6 +193,11 @@ def main() -> None:
     check_efficiency_limited_thresholds()
     check_generalized_tail()
     check_safety_margin_intensity_caps()
+    check_app_custom_probabilities_not_overridden()
+    check_app_bundled_manuscript_values_available()
+    check_app_rejects_nonnumeric_cells()
+    check_app_rejects_partial_cases()
+    check_app_rejects_resolution_above_subspace_dimension()
     print("All smoke tests passed.")
 
 

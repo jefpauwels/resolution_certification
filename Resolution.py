@@ -685,9 +685,19 @@ def optimize_poisson_spacing(
         options={"maxiter": maxiter, "ftol": ftol, "disp": False},
     )
 
+    if not result.success:
+        raise RuntimeError(f"SLSQP optimisation failed: {result.message}")
     increments = np.clip(result.x, 0.0, None)
+    if not np.all(np.isfinite(increments)):
+        raise RuntimeError("SLSQP optimisation returned non-finite increments")
+    if float(np.sum(increments)) > intensity_cap + 1e-8:
+        raise RuntimeError("SLSQP optimisation violated the intensity bound")
     intensities = np.cumsum(increments)
+    if not np.all(np.isfinite(intensities)):
+        raise RuntimeError("SLSQP optimisation returned non-finite intensities")
     probability = total_guess_prob_from_mus(intensities, n_max=photon_cutoff, loss=loss, denominator=num_states)
+    if not np.isfinite(probability):
+        raise RuntimeError("SLSQP optimisation returned a non-finite objective value")
     return HeuristicCalibrationResult(increments=increments, intensities=intensities, probability=probability)
 
 
@@ -1099,13 +1109,6 @@ def build_certification_table(
         cap = float(case.intensity_cap if case.intensity_cap is not None else max(subset))
         if cap <= 0:
             raise ValueError("Intensity cap must be positive")
-        full_table = untrusted_witness_table(
-            num_states=case.num_inputs,
-            intensity_cap=cap,
-            loss=loss,
-            photon_cutoff=case.max_photons,
-            method=method,
-        )
         subspace_table = subspace_witness_table(
             num_states=case.num_inputs,
             intensity_cap=cap,
@@ -1120,7 +1123,6 @@ def build_certification_table(
             intensity_cap=cap,
             loss=loss,
         )
-        untrusted_full = full_table[case.resolution - 1]
         untrusted = subspace_table[case.resolution - 1]
         experimental_value = None
         if observed_guesses is not None and case.num_inputs in observed_guesses:
