@@ -491,7 +491,7 @@ def render_grouped_bar_chart(
                 ],
             },
         },
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -534,7 +534,7 @@ def render_dashboard(frame: pd.DataFrame) -> None:
     st.subheader("Certification table")
     st.dataframe(
         frame,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config=result_column_config(),
     )
@@ -703,7 +703,7 @@ If you use this tool, please cite that paper.
             intensities_frame = st.data_editor(
                 intensities_frame,
                 num_rows="dynamic",
-                use_container_width=True,
+                width="stretch",
                 key="intensities_table",
             )
         with right:
@@ -726,7 +726,7 @@ If you use this tool, please cite that paper.
             probabilities_frame = st.data_editor(
                 probabilities_frame,
                 num_rows="dynamic",
-                use_container_width=True,
+                width="stretch",
                 key="probabilities_table",
             )
 
@@ -749,7 +749,7 @@ If you use this tool, please cite that paper.
             cases_frame = st.data_editor(
                 cases_frame,
                 num_rows="dynamic",
-                use_container_width=True,
+                width="stretch",
                 key="cases_table",
                 column_config={
                     "I": st.column_config.NumberColumn(
@@ -760,7 +760,7 @@ If you use this tool, please cite that paper.
             )
 
     with st.sidebar:
-        compute_requested = st.button("Compute witnesses", type="primary", use_container_width=True)
+        compute_requested = st.button("Compute witnesses", type="primary", width="stretch")
 
     with results_tab:
         if compute_requested:
@@ -797,7 +797,7 @@ If you use this tool, please cite that paper.
                     data=csv_data,
                     file_name="pnr_certification_results.csv",
                     mime="text/csv",
-                    use_container_width=True,
+                    width="stretch",
                 )
             with col_tex:
                 st.download_button(
@@ -805,7 +805,7 @@ If you use this tool, please cite that paper.
                     data=latex_table,
                     file_name="pnr_certification_results.tex",
                     mime="text/plain",
-                    use_container_width=True,
+                    width="stretch",
                 )
             st.subheader("LaTeX table")
             st.code(latex_table, language="latex")
